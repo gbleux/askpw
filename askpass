@@ -1,0 +1,141 @@
+#!/bin/sh
+# ssh-askpass cli implementation
+# this script first retrieves the passphrase and invokes
+# itself again in order to behave as expected by SSH_ASKPASS commands.
+#
+# the name of the script determines the command to execute
+# (e.g. symlinked as sftp-ask will wrap the sftp binary)
+#
+# if ASKPASS_COMMAND is defined, it is invoked in order to receive the
+# password on stdout, otherwise the password is read from stdin.
+# alternatively ASKPASS_ARGUMENTS can be defined, which holds the arguments
+# passed to askpw. if neither is set, the password is read from standard
+# input.
+#
+# declaring a command via ASKPASS_CONSUMER gives control over the
+# sub-command to invoke. if not present, attempts are made to determine
+# the command from the wrapper script name. creating aliases/symlinks to
+# this script with different names (e.g. scp-ask) allows for convenient
+# wrapping.
+#
+#
+# the downside of this solution is that a passphrase is always requested
+# even if SSH_ASKPASS is never invoked.
+#
+#
+# based on http://andre.frimberger.de/index.php/linux/reading-ssh-password-from-stdin-the-openssh-5-6p1-compatible-way/#comment-25925
+#
+
+#
+# resolve the wrapped binary. the first argument is used for lookup in
+# the PATH.
+#
+resolve_consumer() {
+    # ask must be the last pattern as it would otherwise
+    # leave out pass in askpass
+    for STRIP in askpass askpw ask; do
+        # hyphen-less variant must be last as it would leave a hypen
+        # in the result
+        SED_SUB="$SED_SUB -e s/-$STRIP// -e s/$STRIP-// -e s/$STRIP//"
+    done
+    unset STRIP
+
+    SELF_BIN="`basename $1 | sed --posix -r $SED_SUB`"
+    ASKPASS_CONSUMER="`which $SELF_BIN 2>/dev/null`"
+}
+
+#
+# check if a consumer binary has been defined
+#
+has_consumer() {
+    test -n "$ASKPASS_CONSUMER"
+}
+
+#
+# execute the consumer binary without a TTY
+# @param $... {any} pass-through arguments
+#
+run_consumer() {
+    # detach from tty
+    #strace $ASKPASS_CONSUMER "$@" </dev/null
+    setsid $ASKPASS_CONSUMER "$@"
+}
+
+#
+# export various environment variables.
+# @param $1 {string} path to this script (usually $0)
+#
+prepare_env() {
+    # define this script as askpass command...
+    export SSH_ASKPASS=$1
+    # ...but the next invokation has access to the password
+    export ASKPASS_PASSWORD
+    # in case it is of interest
+    export ASKPASS_CONSUMER
+
+    # necessary even if not in X environment
+    if test -z "$DISPLAY"; then
+        export DISPLAY=no-such-host:0
+    fi
+}
+
+#
+# check if a password has been set which we just need to echo.
+#
+run_as_echo() {
+    test -n "$ASKPASS_PASSWORD"
+}
+
+#
+# check if we should run askpw with custom arguments
+#
+run_as_askpw() {
+    test -n "$ASKPASS_ARGUMENTS"
+}
+
+#
+# check if we run a custom command
+#
+run_as_any() {
+    test -n "$ASKPASS_COMMAND"
+}
+
+if run_as_echo; then
+    # this is the second invokation
+    # or someone exported the password manually
+    printf "$ASKPASS_PASSWORD"
+    exit 0
+elif run_as_askpw; then
+    # run askpw with provided arguments
+    ASKPASS_PASSWORD=`askpw $ASKPASS_ARGUMENTS`
+elif run_as_any; then
+    # spawn command for password retrieval
+    # the only output on stdout is expected to be the password
+    ASKPASS_PASSWORD=`$ASKPASS_COMMAND`
+else
+    # read password from stdin
+    read ASKPASS_PASSWORD
+fi
+
+# avoid loops
+if test -z "$ASKPASS_PASSWORD"; then
+    ASKPASS_PASSWORD="\0"
+#    echo "No password retrieved" 1>&2
+#    exit 1
+fi
+
+# determine ssh command name from wrapper script name
+# unless externally configured
+if ! has_consumer;then
+    resolve_consumer $0
+fi
+
+if ! has_consumer; then
+    echo "Unable to determine sub-command" 1>&2
+    exit 1
+fi
+
+prepare_env "$0"
+run_consumer "$@"
+
+exit $?
