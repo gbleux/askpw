@@ -4,8 +4,8 @@ interactive prompt wrapper for password managers
 
 # synopsis
 
-askpw \[--stderr\] \[--bin=PATH\] \[--entry=NAME\] \[OPTION\]...
-askpw --version
+askpw \[--stderr\] \[--bin=PATH\] \[--entry=NAME\] \[OPTION\]...  
+askpw --version  
 askpw --help
 
 # description
